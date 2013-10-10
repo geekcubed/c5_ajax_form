@@ -42,8 +42,9 @@ class FormBlockController extends Concrete5_Controller_Block_Form {
 		//Set up nice clean variables for the view to use.
 		//Note that we don't call parent::view(), because built-in form block controller doesn't have one(!!)
 		
-		$miniSurvey = new MiniSurvey();
+		$miniSurvey = new BootstrapMiniSurvey();
 		$miniSurvey->frontEndMode = true;
+                $miniSurvey->enablePlaceholders = $this->enablePlaceholders;
 
 		$bID = intval($this->bID);
 		$qsID = intval($this->questionSetId);
@@ -56,6 +57,8 @@ class FormBlockController extends Concrete5_Controller_Block_Form {
 		while ($questionRow = $questionsRS->fetchRow()) {
 			$question = $questionRow;
 			$question['input'] = $miniSurvey->loadInputType($questionRow, false);
+                        $question['labelClasses'] = '';
+                        
 			if ($questionRow['inputType'] == 'fileupload') {
 				$hasFileUpload = true;
 			}
@@ -69,40 +72,34 @@ class FormBlockController extends Concrete5_Controller_Block_Form {
 				$question['type'] = $questionRow['inputType'];
 			}
 	
-			//Construct label "for" (and misc. hackery for checkboxlist / radio lists)
-			if ($question['type'] == 'checkboxlist') {
-				$question['input'] = str_replace('<div class="checkboxPair">', '<div class="checkboxPair"><label>', $question['input']);
-				$question['input'] = str_replace("</div>\n", "</label></div>\n", $question['input']); //include linebreak in find/replace string so we don't replace the very last closing </div> (the one that closes the "checkboxList" wrapper div that's around this whole question)
-			} else if ($question['type'] == 'radios') {
-				//Put labels around each radio items (super hacky string replacement -- this might break in future versions of C5)
-				$question['input'] = str_replace('<div class="radioPair">', '<div class="radioPair"><label>', $question['input']);
-				$question['input'] = str_replace('</div>', '</label></div>', $question['input']);
-		
-				//Make radioList wrapper consistent with checkboxList wrapper
-				$question['input'] = "<div class=\"radioList\">\n{$question['input']}\n</div>\n";
-			} else {
-				$question['labelFor'] = 'for="Question' . $questionRow['msqID'] . '"';
-			}
-	
+                        //Construct Label pieces
+                        switch ($question['type']) {
+                            case 'checkboxlist':
+                            case 'radios':
+                                //do nothing
+                                break;
+                            case 'fileupload':
+                            case 'textarea':
+                                $question['labelFor'] = 'for="Question' . $questionRow['msqID'] . '"';
+                                break;
+                            
+                            Default:
+                                //Everything else gets a normal label
+                                //Which can be hidden if placeholders are on
+                                
+                                $question['labelFor'] = 'for="Question' . $questionRow['msqID'] . '"';
+                                if ($this->enablePlaceholders) {
+                                    //Hide for fields with a placeholder
+                                    $question['labelClasses'] .= ' sr-only';
+                                }
+                        }
+                        			
 			//Remove hardcoded style on textareas
-			if ($question['type'] == 'textarea') {
-				$question['input'] = str_replace('style="width:95%"', '', $question['input']);
+                        //Not sure if this is neeeded, but leave to be safe
+                        if ($question['type'] == 'textarea') {
+                                $question['input'] = str_replace('style="width:95%"', '', $question['input']);
 			}
-	
-			//Add placeholder attributes
-			if ($this->enablePlaceholders) {
-				$search = 'id="Question';
-				$replace = 'placeholder="' . $question['question'] . ($question['required'] ? ' *' : '') . '" ' . $search;
-				$question['input'] = str_replace($search, $replace, $question['input']);
-			}
-			
-			//Hide some field labels if showing placeholders
-			$question['labelClasses'] = '';
-			if ($this->enablePlaceholders && in_array($question['type'], array('text', 'textarea', 'email', 'telephone', 'url'))) {
-				$question['labelClasses'] .= ' visuallyhidden';
-			}
-			
-			
+				
 			$questions[] = $question;
 		}
 
@@ -135,6 +132,97 @@ class FormBlockController extends Concrete5_Controller_Block_Form {
 		$this->set('enablePlaceholders', $this->enablePlaceholders);
 		$this->set('formName', $surveyBlockInfo['surveyName']); //for GA event tracking
 	}
-	
-	
 }	
+
+
+class BootstrapMiniSurvey extends MiniSurvey {
+
+    public $enablePlaceholders = false;
+    
+    public function loadInputType($questionData, $showEdit) {
+
+        if ($showEdit) {
+            //Fallback to the default C5 method
+            //Prevents conflicts with the internal Bootstrap CSS when
+            //editing forms via the Dashboard
+            return parent::loadInputType($questionData, $showEdit);
+        } else {
+            //Work our magic :)
+            $options = explode('%%', $questionData['options']);
+            $msqID = intval($questionData['msqID']);
+            $placeholderAttr = $this->enablePlaceholders ? 
+                    'placeholder="' . $question['question'] . ($question['required'] ? ' *' : '') . '" ' : '';
+            $datetime = loader::helper('form/date_time');
+            switch ($questionData['inputType']) {
+                case 'checkboxlist':
+                    
+                    for ($i = 0; $i < count($options); $i++) {
+                        if (strlen(trim($options[$i])) == 0) {
+                            continue;                        
+                        }
+                        
+                        $checked = ($_REQUEST['Question' . $msqID . '_' . $i] == trim($options[$i])) ? 'checked' : '';
+                        $html.= '  <div class="checkbox"><label><input name="Question' 
+                                . $msqID . '_' . $i . '" type="checkbox" value="' 
+                                . trim($options[$i]) . '" ' . $checked . ' />&nbsp;' . $options[$i] . '</label></div>' . "\r\n";
+                    }
+                    
+                    return $html;
+
+                case 'select':
+                    if ($this->frontEndMode) {
+                        $selected = (!$_REQUEST['Question' . $msqID]) ? 'selected="selected"' : '';
+                        $html.= '<option value="" ' . $selected . '>----</option>';
+                    }
+                    foreach ($options as $option) {
+                        $checked = ($_REQUEST['Question' . $msqID] == trim($option)) ? 'selected="selected"' : '';
+                        $html.= '<option ' . $checked . '>' . trim($option) . '</option>';
+                    }
+                    return '<select name="Question' . $msqID . '" id="Question' . $msqID . '" >' . $html . '</select>';
+
+                case 'radios':
+                    foreach ($options as $option) {
+                        if (strlen(trim($option)) == 0) {
+                            continue;
+                        }
+                        
+                        $checked = ($_REQUEST['Question' . $msqID] == trim($option)) ? 'checked' : '';
+                        $html.= '<div class="radio"><label><input name="Question' 
+                                . $msqID . '" type="radio" value="' . trim($option) . '" ' 
+                                . $checked . ' />&nbsp;' . $option . '</label></div>';
+                    }
+                    return $html;
+
+                case 'fileupload':
+                    $html = '<input type="file" name="Question' . $msqID . '" id="Question' . $msqID . '" />';
+                    return $html;
+
+                case 'text':
+                    $val = ($_REQUEST['Question' . $msqID]) ? Loader::helper('text')->entities($_REQUEST['Question' . $msqID]) : '';
+                    return '<textarea class="form-control" name="Question' . $msqID . '" id="Question' . $msqID . '" rows="' . $questionData['height'] . '">' . $val . '</textarea>';
+                case 'url':
+                    $val = ($_REQUEST['Question' . $msqID]) ? $_REQUEST['Question' . $msqID] : '';
+                    
+                    return '<input class="form-control" name="Question' . $msqID . '" 
+                        id="Question' . $msqID . '" type="url" 
+                        value="' . stripslashes(htmlspecialchars($val)) . '" ' . $placeholderAttr . '/>';
+                case 'telephone':
+                    $val = ($_REQUEST['Question' . $msqID]) ? $_REQUEST['Question' . $msqID] : '';
+                    return '<input class="form-control" name="Question' . $msqID . '" id="Question' . $msqID . '" type="tel" value="' . stripslashes(htmlspecialchars($val)) . '" ' . $placeholderAttr . '/>';
+                case 'email':
+                    $val = ($_REQUEST['Question' . $msqID]) ? $_REQUEST['Question' . $msqID] : '';
+                    return '<input class="form-control" name="Question' . $msqID . '" id="Question' . $msqID . '" type="email" value="' . stripslashes(htmlspecialchars($val)) . '" ' . $placeholderAttr . '/>';
+                case 'date':
+                    $val = ($_REQUEST['Question' . $msqID]) ? $_REQUEST['Question' . $msqID] : '';
+                    return $datetime->date('Question' . $msqID, ($val !== '' ? $val : 'now'));
+                case 'datetime':
+                    $val = ($_REQUEST['Question' . $msqID]) ? $_REQUEST['Question' . $msqID] : '';
+                    return $datetime->datetime('Question' . $msqID, $val);
+                case 'field':
+                default:
+                    $val = ($_REQUEST['Question' . $msqID]) ? $_REQUEST['Question' . $msqID] : '';
+                    return '<input class="form-control" name="Question' . $msqID . '" id="Question' . $msqID . '" type="text" value="' . stripslashes(htmlspecialchars($val)) . '" ' . $placeholderAttr . '/>';
+            }
+        }
+    }
+}
